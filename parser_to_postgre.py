@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 import psycopg2
 import time
 import random
+import re
 
 # Укажите путь к chromedriver
 chrome_driver_path = r"C:\Users\Ваграм\chromedriver.exe"
@@ -33,8 +34,8 @@ def save_to_postgres(data):
 
         # SQL-запрос для вставки данных
         insert_query = """
-            INSERT INTO auto.car_listings_2 (car_name, engine_volume, engine_power, fuel_type, transmission, body_type, drive_type, equipment, options, price_discounted, price, link, year, mileage_status, seller)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            INSERT INTO telegrambot.changan_auto_ru (car_name, year,mileage_status,link,price)
+            VALUES (%s, %s, %s, %s, %s);
         """
 
         # Вставка данных
@@ -64,11 +65,11 @@ def parse_auto_ru(url, num_pages):
             is_captcha_passed = True
 
         # Даем странице загрузиться
-        WebDriverWait(driver, 60).until(EC.presence_of_element_located((By.CLASS_NAME, "ListingItem")))
+        WebDriverWait(driver, 45).until(EC.presence_of_element_located((By.CLASS_NAME, "ListingItem")))
         
         # Прокручиваем страницу вниз для загрузки всех объявлений (опционально)
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(random.uniform(7, 15))  # Рандомная пауза от 7 до 15 секунд
+        time.sleep(random.uniform(7, 12))  # Рандомная пауза от 7 до 15 секунд
         
         # Извлекаем HTML-код страницы
         page_source = driver.page_source
@@ -78,54 +79,39 @@ def parse_auto_ru(url, num_pages):
         cars = soup.find_all('div', class_='ListingItem')
 
         for car in cars:
-            tech_columns = car.find_all('div', class_='ListingItemTechSummaryDesktop__column')
-            link_element = car.find('a', class_='ListingItemTitle__link')
-            price_element = car.find('a', class_='Link ListingItemPrice__link')
-            price_element2 = car.find('div', class_='ListingItemPrice ListingItem__price ListingItem__price_second')
-            year_element = car.find('div', class_='ListingItem__year')  # Год автомобиля
-            km_age_element = car.find('div', class_='ListingItem__kmAge')  # Пробег или статус (Новый)
-            seller_element = car.find('a', class_='ListingItem__salonName')  # Продавец
+            try:
+                 # Название автомобиля
+                link_element = car.find('a', class_='ListingItemTitle__link')
+                car_name = link_element.text.strip() if link_element else None
 
-            if len(tech_columns) >= 1 and link_element:
-                # Первый столбец с характеристиками
-                tech_cells_1 = tech_columns[0].find_all('div', class_='ListingItemTechSummaryDesktop__cell')
-                
-                # Второй столбец с характеристиками (если он существует)
-                tech_cells_2 = tech_columns[1].find_all('div', class_='ListingItemTechSummaryDesktop__cell') if len(tech_columns) > 1 else []
+                # Ссылка на объявление
+                link = link_element.get('href') if link_element else None
 
-                # Обрабатываем первый столбец
-                engine_info = tech_cells_1[0].text.strip().replace('\u2009', ' ').replace('\xa0', ' ') if len(tech_cells_1) > 0 else ''
-                engine_parts = engine_info.split(' / ')
+                # Цена
+                price_element = car.find('a', class_='Link ListingItemPrice__link')
+                if price_element:
+                    price_text=price_element.find('span').text.strip()
+                    price_text = re.sub(r'[^\d]', '', price_text)  # Убираем символы, кроме цифр
+                    price=int(price_text) if price_text else 0  # Преобразуем в число
+                else:
+                    price=0
 
-                engine_volume = engine_parts[0] if len(engine_parts) > 0 else ''
-                engine_power = engine_parts[1] if len(engine_parts) > 1 else ''
-                fuel_type = engine_parts[2] if len(engine_parts) > 2 else ''
+                # Год выпуска
+                year_element = car.find('div', class_='ListingItem__year')
+                year = year_element.text.strip() if year_element else None
 
-                transmission = tech_cells_1[1].text.strip() if len(tech_cells_1) > 1 else ''
-                body_type = tech_cells_1[2].text.strip() if len(tech_cells_1) > 2 else ''
+                # Пробег или статус (Новый)
+                km_age_element = car.find('div', class_='ListingItem__kmAge')
+                km_age = km_age_element.text.strip() if km_age_element else None
 
-                # Обрабатываем второй столбец (если он существует)
-                drive_type = tech_cells_2[0].text.strip() if len(tech_cells_2) > 0 else ''
-                trim = tech_cells_2[1].text.strip() if len(tech_cells_2) > 1 else ''  # Оставляем пустое значение, если элемента нет
-                options = tech_cells_2[2].text.strip() if len(tech_cells_2) > 2 else ''  # Оставляем пустое значение, если элемента нет
-
-                # Название автомобиля
-                car_name = link_element.text.strip()
-
-                # Ссылка и цена
-                link = link_element.get('href')
-                price = price_element.find('span').text.strip() if price_element else ''
-                price2 = price_element2.find('span').text.strip() if price_element2 else ''
-
-                # Добавляем новые данные
-                year = year_element.text.strip() if year_element else ''  # Год выпуска
-                km_age = km_age_element.text.strip() if km_age_element else ''  # Пробег или статус
-                seller = seller_element.text.strip() if seller_element else ''  # Продавец
-
-                # Добавляем данные в список
-                car_data.append([car_name, engine_volume, engine_power, fuel_type, transmission, body_type, drive_type, trim, options, price, price2, link, year, km_age, seller])
-            else:
-                print("Элемент не найден или данных недостаточно, пропускаем...")
+                # Проверяем, что данные корректно собраны
+                if all([car_name, link, year, km_age, price]):
+                    # Добавляем данные в список
+                    car_data.append([car_name, year, km_age, link, price])
+                else:
+                    print(f"Данных недостаточно для одного из объявлений. Пропускаем...")
+            except Exception as e:
+                print(f"Ошибка при обработке объявления: {e}")
 
         print(f"Страница {page} успешно обработана")
 
@@ -133,8 +119,8 @@ def parse_auto_ru(url, num_pages):
 
 # Основная функция
 def main():
-    url = "https://auto.ru/moskovskaya_oblast/cars/jetour/all/"
-    num_pages = 53 # Количество страниц для парсинга
+    url = "https://auto.ru/moskovskaya_oblast/cars/changan/all/"
+    num_pages = 1 # Количество страниц для парсинга
     car_listings = parse_auto_ru(url, num_pages)
 
     if car_listings:
