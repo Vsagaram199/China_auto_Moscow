@@ -34,8 +34,8 @@ def save_to_postgres(data):
 
         # SQL-запрос для вставки данных
         insert_query = """
-            INSERT INTO telegrambot.changan_auto_ru (car_name, year,mileage_status,link,price)
-            VALUES (%s, %s, %s, %s, %s);
+            INSERT INTO telegrambot.changan_auto_ru (car_name, year,mileage_status,link,price,car_volume,car_power,body_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """
 
         # Вставка данных
@@ -104,10 +104,18 @@ def parse_auto_ru(url, num_pages):
                 km_age_element = car.find('div', class_='ListingItem__kmAge')
                 km_age = km_age_element.text.strip() if km_age_element else None
 
+                #Технические элементы
+                tech_summary_element=car.find('div', class_='ListingItemTechSummaryDesktop__cell')
+                tech_summary_text=tech_summary_element.text.strip()
+                tech_parts=tech_summary_text.split('/')
+                engine_volume=tech_parts[0].strip() if len(tech_parts) > 0 else None
+                engine_power=tech_parts[1].replace('л.с.', '').strip() if len(tech_parts) > 1 else None
+                body_type = tech_parts[-1].strip() if len(tech_parts) > 2 else ''
+
                 # Проверяем, что данные корректно собраны
-                if all([car_name, link, year, km_age, price]):
+                if all([car_name, link, year, km_age, price,engine_volume,engine_power,body_type]):
                     # Добавляем данные в список
-                    car_data.append([car_name, year, km_age, link, price])
+                    car_data.append([car_name, year, km_age, link, price,engine_volume,engine_power,body_type])
                 else:
                     print(f"Данных недостаточно для одного из объявлений. Пропускаем...")
             except Exception as e:
