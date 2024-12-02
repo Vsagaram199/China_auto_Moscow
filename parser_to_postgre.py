@@ -51,10 +51,51 @@ def save_to_postgres(data):
             cursor.close()
             connection.close()
 
+# **Функция для определения количества страниц**
+def get_total_pages(url):
+    driver.get(url)
+
+    try:
+        # Ждем появления блока пагинации
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "ListingPagination__pages"))
+        )
+        
+        # Ищем блок пагинации
+        pagination_block = driver.find_element(By.CLASS_NAME, "ListingPagination__pages")
+        # Ищем все элементы с классом Button__text внутри блока пагинации
+        pagination_numbers = pagination_block.find_elements(By.CLASS_NAME, "Button__text")
+        
+        # Сохраняем номера страниц из текста элементов
+        page_numbers = []
+        for number in pagination_numbers:
+            try:
+                page_text = number.text.strip()
+                if page_text.isdigit():  # Убедимся, что это число
+                    page_numbers.append(int(page_text))
+            except Exception as e:
+                print(f"Ошибка при обработке номера страницы: {e}")
+
+        # Определяем максимальный номер страницы
+        if page_numbers:
+            total_pages = max(page_numbers)
+            print(f"Обнаружено страниц: {total_pages}")
+            return total_pages
+
+    except Exception as e:
+        print(f"Ошибка при определении количества страниц: {e}")
+
+    # Если блок не найден, возвращаем 1
+    print("Блок пагинации не найден или страницы не определены. Возвращаю 1.")
+    return 1
 # Функция для парсинга страницы с объявлениями на auto.ru
-def parse_auto_ru(url, num_pages):
+def parse_auto_ru(url):
     car_data = []
     is_captcha_passed = False
+
+    # **Определяем количество страниц**
+    num_pages = get_total_pages(url)
+    print(f"Обнаружено страниц: {num_pages}")
 
     for page in range(1, num_pages + 1):
         current_url = url + f"?page={page}"
@@ -128,8 +169,7 @@ def parse_auto_ru(url, num_pages):
 # Основная функция
 def main():
     url = "https://auto.ru/moskovskaya_oblast/cars/changan/all/"
-    num_pages = 1 # Количество страниц для парсинга
-    car_listings = parse_auto_ru(url, num_pages)
+    car_listings = parse_auto_ru(url)
 
     if car_listings:
         save_to_postgres(car_listings)  # Сохраняем данные напрямую в PostgreSQL
