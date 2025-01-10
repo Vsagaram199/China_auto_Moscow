@@ -1,5 +1,6 @@
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CallbackContext
+from telegram.ext import CommandHandler
 import os
 from dotenv import load_dotenv
 import psycopg2
@@ -18,7 +19,8 @@ DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 
 # Глобальные переменные
-is_bot_active = True
+is_bot_active = False
+current_page = 1
 
 # Функция подключения к базе данных
 def get_db_connection():
@@ -35,41 +37,83 @@ def get_db_connection():
         print(f"Ошибка подключения к базе данных: {e}")
         return None
 
-# Главная клавиатура с кнопками
+# Главная клавиатура
 def main_menu_keyboard():
     keyboard = [
         [KeyboardButton("Старт"), KeyboardButton("Стоп")],
-        [KeyboardButton("/filter Changan 2024"), KeyboardButton("/filter car_volume=2.0")],
+        [KeyboardButton("Фильтр"), KeyboardButton("Следующая страница")],
         [KeyboardButton("Помощь")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Обработчик команды /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global is_bot_active
+# Подменю фильтров
+def filter_menu_keyboard():
+    keyboard = [
+        [KeyboardButton("Год"), KeyboardButton("Объем")],
+        [KeyboardButton("Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# Обработчик кнопки "Старт"
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global is_bot_active, current_page
     if update.effective_user.id == MY_TELEGRAM_ID:
         is_bot_active = True
+        current_page = 1
         await update.message.reply_text(
-            "Привет, Ваграм! Бот активирован.\nИспользуйте кнопки для удобства:",
+            "Бот активирован. Используйте кнопки для удобства:",
             reply_markup=main_menu_keyboard()
         )
     else:
         await update.message.reply_text("Извините, этот бот не предназначен для вас.")
 
-# Обработчик команды /stop
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Обработчик кнопки "Стоп"
+async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_bot_active
     if update.effective_user.id == MY_TELEGRAM_ID:
         is_bot_active = False
         await update.message.reply_text(
-            "Бот остановлен. Нажмите /start для активации.",
+            "Бот остановлен. Нажмите \"Старт\" для активации.",
             reply_markup=main_menu_keyboard()
         )
     else:
         await update.message.reply_text("Извините, этот бот не предназначен для вас.")
 
+# Обработчик кнопки "Фильтр"
+async def handle_filter(update: Update, context: CallbackContext):
+    if not is_bot_active:
+        await update.message.reply_text("Бот остановлен. Активируйте его кнопкой \"Старт\".")
+        return
+    await update.message.reply_text(
+        "Выберите критерий фильтрации:",
+        reply_markup=filter_menu_keyboard()
+    )
+
+# Обработчик кнопки "Год"
+async def handle_year(update: Update, context: CallbackContext):
+    if not is_bot_active:
+        await update.message.reply_text("Бот остановлен. Активируйте его кнопкой \"Старт\".")
+        return
+    await update.message.reply_text("Введите год для поиска автомобилей:")
+    context.user_data['filter_mode'] = 'year'
+
+# Обработчик кнопки "Объем"
+async def handle_volume(update: Update, context: CallbackContext):
+    if not is_bot_active:
+        await update.message.reply_text("Бот остановлен. Активируйте его кнопкой \"Старт\".")
+        return
+    await update.message.reply_text("Введите объем двигателя для поиска автомобилей:")
+    context.user_data['filter_mode'] = 'volume'
+
+# Обработчик кнопки "Назад"
+async def handle_back(update: Update, context: CallbackContext):
+    await update.message.reply_text(
+        "Возвращаемся в главное меню.",
+        reply_markup=main_menu_keyboard()
+    )
+
 # Запрос данных из базы
-def get_filtered_cars(car_volume=None, year=None, car_name=None, page=1):
+def get_filtered_cars(car_volume=None, year=None, page=1):
     connection = get_db_connection()
     if connection is None:
         return []
@@ -83,16 +127,12 @@ def get_filtered_cars(car_volume=None, year=None, car_name=None, page=1):
         params = []
 
         if car_volume:
-            query += " AND car_volume ILIKE %s"
-            params.append(f"%{car_volume}%")
+            query += " AND TRIM(car_volume) = %s"  # Точное совпадение с учетом удаления лишних пробелов
+            params.append(car_volume)
 
         if year:
             query += " AND year = %s"
             params.append(year)
-
-        if car_name:
-            query += " AND car_name ILIKE %s"
-            params.append(f"%{car_name}%")
 
         # Пагинация
         limit = 10
@@ -111,31 +151,19 @@ def get_filtered_cars(car_volume=None, year=None, car_name=None, page=1):
     finally:
         connection.close()
 
-# Обработчик команды /filter
-async def filter_cars(update: Update, context: CallbackContext):
+# Обработчик кнопки "Следующая страница"
+async def handle_next_page(update: Update, context: CallbackContext):
+    global current_page
     if not is_bot_active:
-        await update.message.reply_text("Бот остановлен. Активируйте его командой /start.")
+        await update.message.reply_text("Бот остановлен. Активируйте его кнопкой \"Старт\".")
         return
 
-    if update.effective_user.id != MY_TELEGRAM_ID:
-        await update.message.reply_text("Вы не авторизованы для использования этого бота.")
-        return
+    current_page += 1
+    cars = get_filtered_cars(page=current_page)
 
-    # Разбор аргументов команды
-    args = context.args
-    car_name, year, car_volume = None, None, None
-
-    for arg in args:
-        if arg.startswith("car_volume="):
-            car_volume = arg.split("=")[1]
-        elif arg.startswith("year="):
-            year = arg.split("=")[1]
-        else:
-            car_name = arg
-
-    cars = get_filtered_cars(car_volume, year, car_name)
     if not cars:
-        await update.message.reply_text("Нет данных по заданным фильтрам.")
+        await update.message.reply_text("Больше нет данных.")
+        current_page -= 1
         return
 
     response = "\n\n".join([
@@ -145,24 +173,61 @@ async def filter_cars(update: Update, context: CallbackContext):
     ])
     await update.message.reply_text(response)
 
-# Обработчик случайных сообщений
-async def unknown_message(update: Update, context: CallbackContext):
-    await update.message.reply_text("Я не понимаю эту команду. Попробуйте воспользоваться кнопками.")
+# Обработчик текстового ввода (год или объем)
+async def handle_text_input(update: Update, context: CallbackContext):
+    if not is_bot_active:
+        await update.message.reply_text("Бот остановлен. Активируйте его кнопкой \"Старт\".")
+        return
+
+    user_input = update.message.text.strip()
+    filter_mode = context.user_data.get('filter_mode')
+
+    try:
+        if filter_mode == 'year' and user_input.isdigit():
+            year = int(user_input)
+            cars = get_filtered_cars(year=year)
+        elif filter_mode == 'volume':
+            # Добавляем " л" к объему, если пользователь забыл указать
+            if not user_input.endswith(" л"):
+                user_input = user_input.strip() + " л"
+
+            car_volume = user_input
+            cars = get_filtered_cars(car_volume=car_volume)
+        else:
+            await update.message.reply_text("Некорректный ввод. Попробуйте снова.")
+            return
+
+        if not cars:
+            await update.message.reply_text("Нет данных по заданным параметрам.")
+            return
+
+        response = "\n\n".join([
+            f"Модель: {car[0]}\nГод: {car[1]}\nПробег: {car[2]} км\nЦена: {car[3]}\n"
+            f"Объём двигателя: {car[4]}\nМощность: {car[5]} л.с.\nСсылка: {car[6]}"
+            for car in cars
+        ])
+        await update.message.reply_text(response, reply_markup=main_menu_keyboard())
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка обработки данных: {e}")
 
 # Основная функция
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stop", stop))
-    application.add_handler(CommandHandler("filter", filter_cars))
-
-    # Обработчик неизвестных сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
+    application.add_handler(MessageHandler(filters.Regex("^(Старт)$"), handle_start))
+    application.add_handler(MessageHandler(filters.Regex("^(Стоп)$"), handle_stop))
+    application.add_handler(MessageHandler(filters.Regex("^(Фильтр)$"), handle_filter))
+    application.add_handler(MessageHandler(filters.Regex("^(Год)$"), handle_year))
+    application.add_handler(MessageHandler(filters.Regex("^(Объем)$"), handle_volume))
+    application.add_handler(MessageHandler(filters.Regex("^(Назад)$"), handle_back))
+    application.add_handler(MessageHandler(filters.Regex("^(Следующая страница)$"), handle_next_page))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
 
     # Запуск бота
     application.run_polling()
 
 if __name__ == "__main__":
     main()
+
+
